@@ -188,42 +188,72 @@ def preencher_campo_dinamico(driver, field_identifiers, text, timeout=15):
             continue
     return False
 
-def debug_select2_containers(driver):
-    """Função para debugar e listar todos os containers select2 visíveis na página"""
-    try:
-        containers = driver.find_elements(By.CSS_SELECTOR, "[id*='s2id_']")
-        visible_containers = []
-        for container in containers:
-            if container.is_displayed():
-                container_id = container.get_attribute('id')
-                # Pega o label associado se existir
-                try:
-                    label_element = driver.find_element(By.CSS_SELECTOR, f"label[for='{container_id.replace('s2id_', '')}']")
-                    label_text = label_element.text
-                except:
-                    label_text = "Sem label"
-                
-                visible_containers.append({
-                    'id': container_id,
-                    'label': label_text
-                })
-        
-        print("=== CONTAINERS SELECT2 VISÍVEIS ===")
-        for container in visible_containers:
-            print(f"ID: {container['id']} | Label: {container['label']}")
-        print("=== FIM DEBUG ===")
-        
-        return visible_containers
-    except Exception as e:
-        print(f"Erro no debug: {e}")
-        return []
-
 def preencher_servicenow(dados):
+    # Aviso sobre limitações do Streamlit Cloud
+    st.warning("⚠️ ATENÇÃO: Automação web no Streamlit Cloud pode ser instável. Para melhor funcionamento, execute localmente.")
+    
     chrome_options = Options()
-    chrome_options.add_argument("--start-maximized")
+    
+    # Configurações para Streamlit Cloud
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-plugins")
+    chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    chrome_options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
+    
+    # Múltiplas tentativas para inicializar o driver
+    driver = None
+    
+    # Tentativa 1: ChromeDriverManager
+    try:
+        st.info("Tentativa 1: Baixando ChromeDriver...")
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+        st.success("ChromeDriver inicializado com sucesso!")
+    except Exception as e1:
+        st.warning(f"Tentativa 1 falhou")
+        
+        # Tentativa 2: Chromium direto
+        try:
+            st.info("Tentativa 2: Usando Chromium do sistema...")
+            chrome_options.binary_location = "/usr/bin/chromium-browser"
+            service = Service("/usr/bin/chromedriver")
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            st.success("Chromium inicializado com sucesso!")
+        except Exception as e2:
+            st.warning(f"Tentativa 2 falhou")
+            
+            # Tentativa 3: Sem service especificado
+            try:
+                st.info("Tentativa 3: Driver padrão...")
+                driver = webdriver.Chrome(options=chrome_options)
+                st.success("Driver padrão inicializado com sucesso!")
+            except Exception as e3:
+                st.error("❌ Todas as tentativas falharam!")
+                st.error("🔧 SOLUÇÃO: Execute localmente para funcionamento garantido")
+                
+                # Instruções para execução local
+                st.markdown("""
+                ### Como executar localmente:
+                1. Instale as dependências:
+                ```bash
+                pip install streamlit pandas selenium webdriver-manager openpyxl
+                ```
+                2. Salve o código em um arquivo .py
+                3. Execute:
+                ```bash
+                streamlit run arquivo.py
+                ```
+                """)
+                
+                return
+    
+    if driver is None:
+        st.error("Não foi possível inicializar o navegador")
+        return
 
     try:
         driver.get(URL_SERVICENOW)
@@ -249,7 +279,7 @@ def preencher_servicenow(dados):
             radios_spans[1].click()
         
         # Aguarda os campos dinâmicos carregarem após seleção do radio button
-        time.sleep(5)  # Aumentado para garantir carregamento completo
+        time.sleep(5)
 
         # --- Tipo de contratação ---
         driver.find_element(By.ID, "s2id_sp_formfield_u_rd_tipo_contratacao_ratecard").click()
@@ -295,19 +325,18 @@ def preencher_servicenow(dados):
             ]
             preencher_campo_dinamico(driver, ordem_identifiers, dados["Ordem estatisica"])
             
-            # Valor do orçamento (NOVO CAMPO ADICIONADO)
+            # Valor do orçamento
             valor_orcamento_identifiers = [
                 "sp_formfield_u_rd_valor_do_orcamento",
                 "//input[contains(@id, 'valor_do_orcamento')]",
                 "//input[contains(@id, 'valor_orcamento')]"
             ]
-            # Verifica se existe a coluna no dados
             if "Valor do orçamento" in dados:
                 preencher_campo_dinamico(driver, valor_orcamento_identifiers, dados["Valor do orçamento"])
-            elif "VALOR" in dados:  # Fallback para usar o mesmo valor
+            elif "VALOR" in dados:
                 preencher_campo_dinamico(driver, valor_orcamento_identifiers, dados["VALOR"])
         
-        # --- Área solicitante (CORRIGIDO COM NOVA FUNÇÃO) ---
+        # --- Área solicitante ---
         time.sleep(3)
         area_solicitante_containers = [
             "s2id_sp_formfield_u_rd_qual_centro_custo_area_solicitante",
@@ -316,7 +345,7 @@ def preencher_servicenow(dados):
         ]
         robust_select2_fill(driver, area_solicitante_containers, dados['Área solicitante'])
         
-        # --- Área destino (CORRIGIDO COM NOVA FUNÇÃO) ---
+        # --- Área destino ---
         time.sleep(3)
         area_destino_containers = [
             "s2id_sp_formfield_u_rd_centro_custo_destino",
@@ -325,7 +354,7 @@ def preencher_servicenow(dados):
         ]
         robust_select2_fill(driver, area_destino_containers, dados['Área destino'])
         
-        # --- Diretoria (CORRIGIDO COM NOVA FUNÇÃO) ---
+        # --- Diretoria ---
         time.sleep(3)
         diretoria_containers = [
             "s2id_sp_formfield_u_rd_diretoria",
@@ -334,7 +363,7 @@ def preencher_servicenow(dados):
         ]
         robust_select2_fill(driver, diretoria_containers, dados['Diretoria'])
         
-        # --- Gerência/Área (CORRIGIDO COM NOVA FUNÇÃO) ---
+        # --- Gerência/Área ---
         time.sleep(3)
         gerencia_containers = [
             "s2id_sp_formfield_u_rd_gerencia",
@@ -421,16 +450,21 @@ def preencher_servicenow(dados):
         except Exception as e:
             print(f"❌ Erro ao preencher campo Gestor: {e}")
 
-        st.success("✅ Formulário preenchido! Confira o navegador. Ele permanecerá aberto para revisão.")
+        st.success("✅ Formulário preenchido! Confira o navegador.")
         
-        # Deixa o navegador aberto indefinidamente
-        WebDriverWait(driver, 3600).until(lambda d: False)
+        # Aviso sobre modo headless
+        st.info("ℹ️ No Streamlit Cloud o navegador roda em modo invisível. Para ver o preenchimento, execute localmente.")
+        
+        # Deixa o navegador aberto por 30 segundos para finalizar
+        time.sleep(30)
 
     except Exception as e:
         st.error(f"Erro durante a automação: {e}")
-        time.sleep(10)
     finally:
-        pass  # não fecha o navegador
+        try:
+            driver.quit()
+        except:
+            pass
 
 # --- Streamlit ---
 st.title("🚀 Automação ServiceNow - Preenchimento de Formulário")
@@ -452,7 +486,7 @@ if uploaded_file:
         st.json(dados_pessoa)
 
         if st.button("Executar Automação"):
-            st.success("Rodando automação... o navegador vai abrir 🚀")
+            st.success("Rodando automação... aguarde...")
             preencher_servicenow(dados_pessoa)
     else:
         st.error("A coluna 'Colaborador' não foi encontrada na planilha.")
