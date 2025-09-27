@@ -7,35 +7,129 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
-from webdriver_manager.chrome import ChromeDriverManager
 import time
+import os
+import platform
 
 URL_SERVICENOW = "https://centrord.service-now.com/esc?id=sc_cat_item&sys_id=8fd94b438740d51064c5a8e80cbb35dd"
 
+def get_chrome_options():
+    """Configura Chrome Options para diferentes ambientes"""
+    options = Options()
+    
+    # Detecção do ambiente
+    is_cloud = any([
+        'streamlit' in platform.platform().lower(),
+        '/home/appuser' in os.getcwd(),
+        '/home/adminuser' in os.getcwd(),
+        os.path.exists('/usr/bin/chromium'),
+        os.path.exists('/usr/bin/chromium-browser')
+    ])
+    
+    if is_cloud:
+        # Configurações para Streamlit Cloud
+        st.info("🌐 Detectado ambiente cloud - usando configuração headless")
+        
+        # Tenta encontrar o binário do Chromium
+        chromium_paths = [
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable"
+        ]
+        
+        chromium_binary = None
+        for path in chromium_paths:
+            if os.path.exists(path):
+                chromium_binary = path
+                break
+        
+        if chromium_binary:
+            options.binary_location = chromium_binary
+            st.success(f"✅ Chromium encontrado: {chromium_binary}")
+        else:
+            st.warning("⚠️ Chromium não encontrado nos caminhos padrão")
+        
+        # Configurações headless obrigatórias
+        options.add_argument("--headless")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-plugins")
+        options.add_argument("--disable-images")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--remote-debugging-port=9222")
+        options.add_argument("--disable-background-timer-throttling")
+        options.add_argument("--disable-renderer-backgrounding")
+        options.add_argument("--disable-backgrounding-occluded-windows")
+        options.add_argument("--disable-web-security")
+        options.add_argument("--disable-features=VizDisplayCompositor")
+    else:
+        # Configurações para ambiente local
+        st.info("💻 Detectado ambiente local")
+        options.add_argument("--start-maximized")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+    
+    return options, is_cloud
+
+def get_chrome_driver():
+    """Cria o driver Chrome com configurações apropriadas"""
+    options, is_cloud = get_chrome_options()
+    
+    if is_cloud:
+        # Para Streamlit Cloud - usa chromedriver do sistema
+        chromedriver_paths = [
+            "/usr/bin/chromedriver",
+            "/usr/local/bin/chromedriver",
+            "/app/.chromedriver/bin/chromedriver"
+        ]
+        
+        chromedriver_path = None
+        for path in chromedriver_paths:
+            if os.path.exists(path):
+                chromedriver_path = path
+                break
+        
+        if chromedriver_path:
+            service = Service(chromedriver_path)
+            st.success(f"✅ ChromeDriver encontrado: {chromedriver_path}")
+        else:
+            st.error("❌ ChromeDriver não encontrado")
+            service = Service()  # Tenta usar do PATH
+    else:
+        # Para ambiente local - usa webdriver-manager
+        try:
+            from webdriver_manager.chrome import ChromeDriverManager
+            service = Service(ChromeDriverManager().install())
+        except ImportError:
+            st.warning("⚠️ webdriver-manager não instalado, tentando usar driver do sistema")
+            service = Service()
+        except Exception as e:
+            st.error(f"❌ Erro com webdriver-manager: {e}")
+            service = Service()
+    
+    return webdriver.Chrome(service=service, options=options)
+
 def wait_and_click(driver, xpath, timeout=15):
-    """Espera até o elemento estar clicável e clica"""
     element = WebDriverWait(driver, timeout).until(
         EC.element_to_be_clickable((By.XPATH, xpath))
     )
     element.click()
 
 def wait_and_send_keys(driver, element_id, text, timeout=15):
-    """Espera até o elemento estar presente e envia texto"""
     element = WebDriverWait(driver, timeout).until(
         EC.presence_of_element_located((By.ID, element_id))
     )
     element.clear()
     element.send_keys(text)
 
-def robust_select2_fill(driver, container_ids, search_text, max_attempts=3):
-    """Função ultra robusta para Select2 com múltiplas estratégias"""
-    
+def robust_select2_fill(driver, container_ids, search_text, max_attempts=3):    
     for container_id in container_ids:
         for attempt in range(max_attempts):
             try:
                 print(f"Tentativa {attempt + 1} para {container_id} com texto '{search_text}'")
                 
-                # Verifica se o container existe e está visível
                 try:
                     container = WebDriverWait(driver, 10).until(
                         EC.presence_of_element_located((By.ID, container_id))
@@ -45,7 +139,6 @@ def robust_select2_fill(driver, container_ids, search_text, max_attempts=3):
                 except:
                     continue
                 
-                # ESTRATÉGIA 1: Clique simples + busca por input ativo
                 try:
                     driver.execute_script(f"document.getElementById('{container_id}').click();")
                     time.sleep(1)
@@ -188,50 +281,58 @@ def preencher_campo_dinamico(driver, field_identifiers, text, timeout=15):
             continue
     return False
 
-def debug_select2_containers(driver):
-    """Função para debugar e listar todos os containers select2 visíveis na página"""
-    try:
-        containers = driver.find_elements(By.CSS_SELECTOR, "[id*='s2id_']")
-        visible_containers = []
-        for container in containers:
-            if container.is_displayed():
-                container_id = container.get_attribute('id')
-                # Pega o label associado se existir
-                try:
-                    label_element = driver.find_element(By.CSS_SELECTOR, f"label[for='{container_id.replace('s2id_', '')}']")
-                    label_text = label_element.text
-                except:
-                    label_text = "Sem label"
-                
-                visible_containers.append({
-                    'id': container_id,
-                    'label': label_text
-                })
-        
-        print("=== CONTAINERS SELECT2 VISÍVEIS ===")
-        for container in visible_containers:
-            print(f"ID: {container['id']} | Label: {container['label']}")
-        print("=== FIM DEBUG ===")
-        
-        return visible_containers
-    except Exception as e:
-        print(f"Erro no debug: {e}")
-        return []
+def debug_environment():
+    """Função para debugar o ambiente"""
+    st.subheader("🔍 Informações do Ambiente")
+    
+    env_info = {
+        "Sistema": platform.system(),
+        "Plataforma": platform.platform(),
+        "Diretório atual": os.getcwd(),
+        "HOME": os.environ.get('HOME', 'N/A'),
+        "PATH": os.environ.get('PATH', 'N/A')[:200] + "...",
+    }
+    
+    # Verifica binários
+    binaries = {
+        "Chromium": ["/usr/bin/chromium", "/usr/bin/chromium-browser"],
+        "Chrome": ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable"],
+        "ChromeDriver": ["/usr/bin/chromedriver", "/usr/local/bin/chromedriver"]
+    }
+    
+    for name, paths in binaries.items():
+        found = [path for path in paths if os.path.exists(path)]
+        env_info[f"{name}"] = found if found else "❌ Não encontrado"
+    
+    for key, value in env_info.items():
+        st.write(f"**{key}**: {value}")
 
 def preencher_servicenow(dados):
-    chrome_options = Options()
-    chrome_options.add_argument("--start-maximized")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-
     try:
-        driver.get(URL_SERVICENOW)
+        st.info("🚀 Iniciando configuração do driver...")
+        
+        # Cria o driver com configurações apropriadas
+        driver = get_chrome_driver()
+        st.success("✅ Driver Chrome inicializado com sucesso!")
 
-        st.info("⚠️ Faça login manual no ServiceNow e aguarde o carregamento do formulário...")
-        WebDriverWait(driver, 120).until(
-            EC.presence_of_element_located((By.ID, "s2id_sp_formfield_u_rd_selecione_o_fluxo_de_trabalho_novo"))
-        )
+        driver.get(URL_SERVICENOW)
+        st.info("🌐 Navegando para ServiceNow...")
+
+        st.warning("⚠️ **ATENÇÃO**: Faça login manual no ServiceNow e aguarde o carregamento do formulário...")
+        st.info("⏳ Aguardando formulário carregar (timeout: 2 minutos)...")
+        
+        # Aguarda o formulário carregar
+        try:
+            WebDriverWait(driver, 120).until(
+                EC.presence_of_element_located((By.ID, "s2id_sp_formfield_u_rd_selecione_o_fluxo_de_trabalho_novo"))
+            )
+            st.success("✅ Formulário carregado!")
+        except Exception as e:
+            st.error(f"❌ Timeout aguardando formulário: {e}")
+            driver.quit()
+            return
+
+        st.info("📝 Iniciando preenchimento do formulário...")
 
         # --- Fluxo de trabalho ---
         driver.find_element(By.ID, "s2id_sp_formfield_u_rd_selecione_o_fluxo_de_trabalho_novo").click()
@@ -248,14 +349,11 @@ def preencher_servicenow(dados):
         elif alocacao == "opex":
             radios_spans[1].click()
         
-        # Aguarda os campos dinâmicos carregarem após seleção do radio button
-        time.sleep(5)  # Aumentado para garantir carregamento completo
+        time.sleep(5)
 
-        # --- Tipo de contratação ---
         driver.find_element(By.ID, "s2id_sp_formfield_u_rd_tipo_contratacao_ratecard").click()
         wait_and_click(driver, "//div[contains(@class,'select2-result-label') and text()='Contratação Ratecard fornecedor Ativo']")
 
-        # --- Fornecedor --- 
         driver.find_element(By.ID, "s2id_sp_formfield_u_rd_fornecedor").click()
         driver.find_element(By.ID, "s2id_autogen7_search").send_keys(dados['Fornecedor'])
         time.sleep(1)
@@ -276,7 +374,6 @@ def preencher_servicenow(dados):
             f"Abertura de chamado para {dados['Perfil']} no valor mensal de {dados['VALOR']} com o centro de custo {dados['Centro']}"
         )
         
-        # --- Código de projeto/orçamento ---
         codigo_identifiers = [
             "sp_formfield_u_rd_codigo_projeto",
             "sp_formfield_u_rd_codigo_orcamento",
@@ -285,7 +382,6 @@ def preencher_servicenow(dados):
         ]
         preencher_campo_dinamico(driver, codigo_identifiers, dados["Centro"])
         
-        # --- Ordem estatística e Valor do orçamento (apenas para OPEX) ---
         if alocacao == "opex":
             # Ordem estatística
             ordem_identifiers = [
@@ -295,19 +391,17 @@ def preencher_servicenow(dados):
             ]
             preencher_campo_dinamico(driver, ordem_identifiers, dados["Ordem estatisica"])
             
-            # Valor do orçamento (NOVO CAMPO ADICIONADO)
+            # Valor do orçamento
             valor_orcamento_identifiers = [
                 "sp_formfield_u_rd_valor_do_orcamento",
                 "//input[contains(@id, 'valor_do_orcamento')]",
                 "//input[contains(@id, 'valor_orcamento')]"
             ]
-            # Verifica se existe a coluna no dados
             if "Valor do orçamento" in dados:
                 preencher_campo_dinamico(driver, valor_orcamento_identifiers, dados["Valor do orçamento"])
-            elif "VALOR" in dados:  # Fallback para usar o mesmo valor
+            elif "VALOR" in dados:
                 preencher_campo_dinamico(driver, valor_orcamento_identifiers, dados["VALOR"])
         
-        # --- Área solicitante (CORRIGIDO COM NOVA FUNÇÃO) ---
         time.sleep(3)
         area_solicitante_containers = [
             "s2id_sp_formfield_u_rd_qual_centro_custo_area_solicitante",
@@ -316,7 +410,6 @@ def preencher_servicenow(dados):
         ]
         robust_select2_fill(driver, area_solicitante_containers, dados['Área solicitante'])
         
-        # --- Área destino (CORRIGIDO COM NOVA FUNÇÃO) ---
         time.sleep(3)
         area_destino_containers = [
             "s2id_sp_formfield_u_rd_centro_custo_destino",
@@ -324,8 +417,7 @@ def preencher_servicenow(dados):
             "s2id_sp_formfield_u_rd_destino"
         ]
         robust_select2_fill(driver, area_destino_containers, dados['Área destino'])
-        
-        # --- Diretoria (CORRIGIDO COM NOVA FUNÇÃO) ---
+
         time.sleep(3)
         diretoria_containers = [
             "s2id_sp_formfield_u_rd_diretoria",
@@ -334,7 +426,6 @@ def preencher_servicenow(dados):
         ]
         robust_select2_fill(driver, diretoria_containers, dados['Diretoria'])
         
-        # --- Gerência/Área (CORRIGIDO COM NOVA FUNÇÃO) ---
         time.sleep(3)
         gerencia_containers = [
             "s2id_sp_formfield_u_rd_gerencia",
@@ -343,17 +434,13 @@ def preencher_servicenow(dados):
         ]
         robust_select2_fill(driver, gerencia_containers, dados['Área'])
         
-        # --- Diretor (MÉTODO DIRETO COM IDs CORRETOS) ---
+        # --- Diretor ---
         time.sleep(3)
-        print("Tentando preencher campo Diretor...")
-        
         try:
-            # Clica no span para abrir o dropdown do Diretor
             diretor_span = driver.find_element(By.ID, "select2-chosen-18")
             diretor_span.click()
             time.sleep(2)
             
-            # Digita no campo de busca específico do Diretor
             diretor_input = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.ID, "s2id_autogen18_search"))
             )
@@ -361,7 +448,6 @@ def preencher_servicenow(dados):
             diretor_input.send_keys(dados['Diretor'])
             time.sleep(3)
             
-            # Clica no resultado
             try:
                 diretor_result = WebDriverWait(driver, 8).until(
                     EC.element_to_be_clickable((By.XPATH, f"//div[contains(@class,'select2-result-label') and contains(text(), '{dados['Diretor']}')]"))
@@ -369,7 +455,6 @@ def preencher_servicenow(dados):
                 diretor_result.click()
                 print("✅ Campo Diretor preenchido com sucesso!")
             except:
-                # Fallback: clica no primeiro resultado visível
                 try:
                     first_result = WebDriverWait(driver, 5).until(
                         EC.element_to_be_clickable((By.CSS_SELECTOR, ".select2-result-label"))
@@ -382,25 +467,19 @@ def preencher_servicenow(dados):
         except Exception as e:
             print(f"❌ Erro ao preencher campo Diretor: {e}")
         
-        # --- Gestor (MÉTODO DIRETO COM IDs CORRETOS) ---
+        # --- Gestor ---
         time.sleep(3)
-        print("Tentando preencher campo Gestor...")
-        
         try:
-            # Clica no span para abrir o dropdown do Gestor
             gestor_span = driver.find_element(By.ID, "select2-chosen-19")
             gestor_span.click()
             time.sleep(2)
             
-            # Digita no campo de busca específico do Gestor
             gestor_input = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.ID, "s2id_autogen19_search"))
             )
             gestor_input.clear()
             gestor_input.send_keys(dados['Gestor'])
             time.sleep(3)
-            
-            # Clica no resultado
             try:
                 gestor_result = WebDriverWait(driver, 8).until(
                     EC.element_to_be_clickable((By.XPATH, f"//div[contains(@class,'select2-result-label') and contains(text(), '{dados['Gestor']}')]"))
@@ -408,7 +487,6 @@ def preencher_servicenow(dados):
                 gestor_result.click()
                 print("✅ Campo Gestor preenchido com sucesso!")
             except:
-                # Fallback: clica no primeiro resultado visível
                 try:
                     first_result = WebDriverWait(driver, 5).until(
                         EC.element_to_be_clickable((By.CSS_SELECTOR, ".select2-result-label"))
@@ -421,38 +499,108 @@ def preencher_servicenow(dados):
         except Exception as e:
             print(f"❌ Erro ao preencher campo Gestor: {e}")
 
-        st.success("✅ Formulário preenchido! Confira o navegador. Ele permanecerá aberto para revisão.")
+        st.success("✅ Formulário preenchido com sucesso!")
         
-        # Deixa o navegador aberto indefinidamente
-        WebDriverWait(driver, 3600).until(lambda d: False)
+        # Comportamento diferente para ambiente cloud vs local
+        _, is_cloud = get_chrome_options()
+        if is_cloud:
+            st.info("🌐 Ambiente cloud: aguardando 60 segundos antes de fechar o navegador...")
+            st.warning("⚠️ **IMPORTANTE**: Revise rapidamente o formulário e finalize se necessário!")
+            time.sleep(60)
+            driver.quit()
+            st.info("🔒 Navegador fechado automaticamente (ambiente cloud)")
+        else:
+            st.info("💻 Ambiente local: navegador permanecerá aberto para revisão...")
+            st.warning("⚠️ **REVISE** o formulário no navegador antes de submeter!")
+            
+            # Aguarda indefinidamente ou até erro
+            try:
+                WebDriverWait(driver, 3600).until(lambda d: False)
+            except:
+                pass
 
     except Exception as e:
-        st.error(f"Erro durante a automação: {e}")
-        time.sleep(10)
-    finally:
-        pass  # não fecha o navegador
+        st.error(f"❌ Erro durante a automação: {e}")
+        import traceback
+        st.error(f"**Detalhes do erro:**\n```\n{traceback.format_exc()}\n```")
+        
+        # Tenta fechar o driver se existir
+        try:
+            driver.quit()
+        except:
+            pass
 
-# --- Streamlit ---
+# --- Interface Streamlit ---
 st.title("🚀 Automação ServiceNow - Preenchimento de Formulário")
+
+# Mostrar informações do ambiente
+_, is_cloud = get_chrome_options()
+if is_cloud:
+    st.success("🌐 **Executando em ambiente cloud** - Selenium configurado para modo headless")
+    
+    with st.expander("🔍 Debug do Ambiente"):
+        debug_environment()
+else:
+    st.info("💻 **Executando em ambiente local** - Selenium abrirá navegador normalmente")
 
 uploaded_file = st.file_uploader("📂 Carregue a planilha Excel", type=["xlsx", "xls"])
 
 if uploaded_file:
-    xls = pd.ExcelFile(uploaded_file)
-    aba = st.selectbox("Escolha a aba da planilha:", xls.sheet_names)
+    try:
+        xls = pd.ExcelFile(uploaded_file)
+        aba = st.selectbox("Escolha a aba da planilha:", xls.sheet_names)
 
-    df = pd.read_excel(uploaded_file, sheet_name=aba)
-    st.dataframe(df)
+        df = pd.read_excel(uploaded_file, sheet_name=aba)
+        
+        st.success(f"✅ Planilha carregada com sucesso! {len(df)} registros encontrados.")
+        
+        with st.expander("👀 Visualizar dados da planilha"):
+            st.dataframe(df)
 
-    if "Colaborador" in df.columns:
-        pessoa = st.selectbox("Selecione a pessoa:", df["Colaborador"].tolist())
-        dados_pessoa = df[df["Colaborador"] == pessoa].iloc[0].to_dict()
+        if "Colaborador" in df.columns:
+            pessoa = st.selectbox("Selecione a pessoa:", df["Colaborador"].tolist())
+            dados_pessoa = df[df["Colaborador"] == pessoa].iloc[0].to_dict()
 
-        st.write("📋 Dados selecionados:")
-        st.json(dados_pessoa)
+            st.subheader("📋 Dados que serão preenchidos:")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**👤 Informações Pessoais:**")
+                st.write(f"• **Colaborador**: {dados_pessoa.get('Colaborador', 'N/A')}")
+                st.write(f"• **Matrícula**: {dados_pessoa.get('Matricula', 'N/A')}")
+                st.write(f"• **Perfil**: {dados_pessoa.get('Perfil', 'N/A')}")
+                
+            with col2:
+                st.write("**💰 Valores:**")
+                st.write(f"• **Valor Mensal**: {dados_pessoa.get('VALOR', 'N/A')}")
+                st.write(f"• **Valor Previsto**: {dados_pessoa.get('PREVISTO', 'N/A')}")
+                st.write(f"• **Centro de Custo**: {dados_pessoa.get('Centro', 'N/A')}")
 
-        if st.button("Executar Automação"):
-            st.success("Rodando automação... o navegador vai abrir 🚀")
-            preencher_servicenow(dados_pessoa)
-    else:
-        st.error("A coluna 'Colaborador' não foi encontrada na planilha.")
+            if st.button("🚀 **EXECUTAR AUTOMAÇÃO**", type="primary"):
+                st.info("🚀 Iniciando automação...")
+                preencher_servicenow(dados_pessoa)
+                
+        else:
+            st.error("❌ A coluna 'Colaborador' não foi encontrada na planilha.")
+            st.info("**Colunas disponíveis**: " + ", ".join(df.columns.tolist()))
+            
+    except Exception as e:
+        st.error(f"❌ Erro ao processar a planilha: {str(e)}")
+
+# Footer
+st.markdown("---")
+st.markdown("""
+### 📌 **Instruções Importantes:**
+
+**Para ambiente Cloud:**
+- O navegador roda em modo headless (sem interface gráfica)
+- Você terá 60 segundos para revisar o formulário
+- Faça o login rapidamente quando solicitado
+
+**Para ambiente Local:**
+- O navegador abre normalmente na tela
+- Você pode revisar com calma antes de submeter
+- O navegador fica aberto até você fechar manualmente
+
+**⚠️ Lembre-se:** Sempre revise o formulário antes de submeter no ServiceNow!
+""")
