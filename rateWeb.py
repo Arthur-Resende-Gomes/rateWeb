@@ -190,7 +190,6 @@ def debug_select2_containers(driver):
         for container in containers:
             if container.is_displayed():
                 container_id = container.get_attribute('id')
-                # Pega o label associado se existir
                 try:
                     label_element = driver.find_element(By.CSS_SELECTOR, f"label[for='{container_id.replace('s2id_', '')}']")
                     label_text = label_element.text
